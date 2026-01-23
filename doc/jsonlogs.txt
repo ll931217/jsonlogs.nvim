@@ -1,0 +1,256 @@
+*jsonlogs.txt*  JSONL Log Analyzer for Neovim
+
+==============================================================================
+CONTENTS                                                     *jsonlogs-contents*
+
+1. Introduction ............................ |jsonlogs-introduction|
+2. Installation ............................ |jsonlogs-installation|
+3. Quick Start ............................. |jsonlogs-quickstart|
+4. Commands ................................ |jsonlogs-commands|
+5. Default Keybinds ........................ |jsonlogs-keybinds|
+6. Configuration ........................... |jsonlogs-configuration|
+7. Features ................................ |jsonlogs-features|
+8. Requirements ............................ |jsonlogs-requirements|
+
+==============================================================================
+1. INTRODUCTION                                          *jsonlogs-introduction*
+
+jsonlogs.nvim is a Neovim plugin for analyzing JSONL (JSON Lines) log files
+with a powerful split-panel interface. It provides:
+
+  - Split-panel viewer with automatic synchronization
+  - Pretty-printed JSON with syntax highlighting
+  - Smart navigation (error jumping, field search, bookmarks)
+  - Analysis tools (statistics, filtering, export)
+  - Advanced features (live tail, jq integration, Telescope)
+
+==============================================================================
+2. INSTALLATION                                          *jsonlogs-installation*
+
+Using lazy.nvim: >
+
+  {
+    "yourusername/jsonlogs.nvim",
+    ft = "jsonl",
+    opts = {
+      prefix = "<leader>jl",
+      auto_open = true,
+    },
+    keys = {
+      { "<leader>jl", "<cmd>JsonLogs<CR>", desc = "Open JSONL viewer" },
+    },
+  }
+<
+
+Using packer.nvim: >
+
+  use {
+    "yourusername/jsonlogs.nvim",
+    config = function()
+      require("jsonlogs").setup({
+        prefix = "<leader>jl",
+        auto_open = true,
+      })
+    end,
+  }
+<
+
+==============================================================================
+3. QUICK START                                              *jsonlogs-quickstart*
+
+1. Open any `.jsonl` file in Neovim
+2. The split-panel viewer will automatically open
+3. Navigate through logs with `j` / `k`
+4. View pretty-printed JSON in the right panel
+5. Press `q` to close
+
+==============================================================================
+4. COMMANDS                                                  *jsonlogs-commands*
+
+:JsonLogs [file]                                                     *:JsonLogs*
+  Open JSONL log viewer. Optional file path argument.
+
+:JsonLogsGoto {line}                                             *:JsonLogsGoto*
+  Jump to specific line number in the viewer.
+
+:JsonLogsClose                                                 *:JsonLogsClose*
+  Close the JSONL viewer.
+
+:JsonLogsStats                                                 *:JsonLogsStats*
+  Show log statistics in a floating window:
+    - Total entries and parse errors
+    - Log level distribution
+    - Service breakdown
+    - Time range
+    - Common fields
+
+:JsonLogsFilter                                               *:JsonLogsFilter*
+  Filter logs by time range. Prompts for start and end timestamps.
+
+:JsonLogsFilterLevel                                     *:JsonLogsFilterLevel*
+  Filter logs by level (error, warn, info, debug).
+
+:JsonLogsExport [file]                                       *:JsonLogsExport*
+  Export current view to a file. If no file specified, prompts for path.
+
+:JsonLogsTail                                                   *:JsonLogsTail*
+  Toggle live tail mode (watch file for changes like `tail -f`).
+
+:JsonLogsJq [filter]                                             *:JsonLogsJq*
+  Apply jq filter to logs. If no filter specified, prompts for one.
+  Examples:
+    :JsonLogsJq '.user_id'
+    :JsonLogsJq 'select(.level=="error")'
+
+:JsonLogsTelescope                                         *:JsonLogsTelescope*
+  Open Telescope fuzzy finder for log entries (requires telescope.nvim).
+
+==============================================================================
+5. DEFAULT KEYBINDS                                          *jsonlogs-keybinds*
+
+All keybinds are customizable via configuration.
+
+Navigation~
+  j / k         Next/previous log entry
+  gg / G        First/last entry
+  ]e / [e       Next/previous error-level log
+  /             Search by field value (prompts for field and value)
+
+Actions~
+  <CR>          Toggle fold in preview panel
+  y             Yank formatted JSON to clipboard
+  m             Toggle bookmark on current line
+  '             List bookmarks and jump to selected
+  c             Toggle compact mode (show only key fields)
+  d             Mark for diff (press again to show diff)
+  s             Show statistics
+  t             Toggle tail mode
+  q             Close viewer
+
+Advanced~
+  <C-f>         Open Telescope picker (if installed)
+  J             Apply jq filter (if jq is installed)
+
+==============================================================================
+6. CONFIGURATION                                        *jsonlogs-configuration*
+
+Default configuration: >
+
+  require("jsonlogs").setup({
+    -- Keybind prefix
+    prefix = "<leader>jl",
+
+    -- Auto-open for .jsonl files
+    auto_open = true,
+
+    -- Panel layout
+    layout = {
+      position = "right",  -- "right" or "bottom"
+      width = 80,          -- Preview panel width
+      height = 20,         -- Preview panel height
+    },
+
+    -- JSON settings
+    json = {
+      indent = 2,
+      use_jq_fallback = true,
+      jq_path = "jq",
+    },
+
+    -- Navigation
+    navigation = {
+      error_field = "level",
+      error_values = { "error", "ERROR", "fatal", "FATAL" },
+    },
+
+    -- Display
+    display = {
+      show_line_numbers = true,
+      syntax_highlighting = true,
+      compact_fields = { "timestamp", "level", "message" },
+    },
+
+    -- Analysis
+    analysis = {
+      timestamp_field = "timestamp",
+      timestamp_formats = {
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "iso8601",
+      },
+    },
+
+    -- Advanced
+    advanced = {
+      tail_update_interval = 100,  -- Milliseconds
+      max_preview_size = 10000,    -- Max chars for Lua pretty-print
+      virtual_text = true,         -- Enable inline annotations
+    },
+
+    -- Keybinds (fully customizable)
+    keys = {
+      quit = "q",
+      next_entry = "j",
+      prev_entry = "k",
+      next_error = "]e",
+      prev_error = "[e",
+      first_entry = "gg",
+      last_entry = "G",
+      toggle_fold = "<CR>",
+      yank_json = "y",
+      bookmark = "m",
+      list_bookmarks = "'",
+      search = "/",
+      compact_mode = "c",
+      diff_view = "d",
+      tail_mode = "t",
+      stats = "s",
+    },
+  })
+<
+
+==============================================================================
+7. FEATURES                                                  *jsonlogs-features*
+
+Core Features~
+  - Split-panel interface (raw logs | pretty-printed JSON)
+  - Auto-sync: cursor movement updates preview
+  - JSON syntax highlighting
+  - Malformed JSON error handling
+
+Navigation Features~
+  - Jump to next/previous error-level logs
+  - Search by field value
+  - Timestamp-based navigation
+  - Bookmark important entries
+
+Display Features~
+  - Collapsible JSON sections (indent-based folding)
+  - Field highlighting across entries
+  - Diff view (side-by-side comparison)
+  - Compact mode (show only key fields)
+
+Analysis Features~
+  - Statistics panel (levels, services, fields)
+  - Time-range filtering
+  - Export filtered results
+  - Yank formatted JSON
+
+Advanced Features~
+  - Live tail mode (watch file changes)
+  - jq integration (powerful JSON transformations)
+  - Telescope integration (fuzzy search)
+  - Virtual text annotations (relative time, durations)
+
+==============================================================================
+8. REQUIREMENTS                                          *jsonlogs-requirements*
+
+Required~
+  - Neovim >= 0.8
+
+Optional~
+  - jq: For handling very large JSON objects and jq filters
+  - telescope.nvim: For fuzzy search through log entries
+
+==============================================================================
+vim:tw=78:ts=8:ft=help:norl:

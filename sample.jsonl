@@ -1,0 +1,5 @@
+{"id": 1, "timestamp": "2024-01-01T10:00:00Z", "level": "info", "message": "User logged in", "user": {"name": "Alice", "age": 30, "email": "alice@example.com"}, "tags": ["vim", "lua"], "service": "auth"}
+{"id": 2, "timestamp": "2024-01-01T10:01:00Z", "level": "warn", "message": "Slow query detected", "user": {"name": "Bob", "age": 25, "email": "bob@example.com"}, "tags": ["rust"], "service": "database", "duration_ms": 1500}
+{"id": 3, "timestamp": "2024-01-01T10:02:00Z", "level": "error", "message": "Connection timeout", "user": {"name": "Carol", "age": 35, "email": "carol@example.com"}, "tags": ["python", "js"], "service": "api", "error": {"code": "TIMEOUT", "details": "Connection to DB failed"}}
+{"id": 4, "timestamp": "2024-01-01T10:03:00Z", "level": "info", "message": "Request processed", "user": {"name": "David", "age": 28}, "tags": ["go"], "service": "api", "response_time": 150}
+{"id": 5, "timestamp": "2024-01-01T10:04:00Z", "level": "debug", "message": "Cache hit", "user": {"name": "Eve"}, "service": "cache", "cache_key": "user:123"}
