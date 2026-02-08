@@ -103,105 +103,189 @@ use {
 
 ```lua
 require("jsonlogs").setup({
-  -- Keybind prefix
+  -- =============================================
+  -- Basic Options
+  -- =============================================
+
+  -- Keybind prefix (used for some commands)
   prefix = "<leader>jl",
 
-  -- Auto-open for .jsonl files
+  -- Automatically open viewer when opening .jsonl files
   auto_open = true,
 
-  -- Panel layout
+  -- =============================================
+  -- Panel Layout
+  -- =============================================
+
   layout = {
-    position = "right",  -- "right" or "bottom"
+    -- Preview panel position: "right" (vertical) or "bottom" (horizontal)
+    position = "right",
+    -- Preview panel width (for vertical split)
     width = 80,
+    -- Preview panel height (for horizontal split)
     height = 20,
   },
 
-  -- JSON settings
+  -- =============================================
+  -- JSON Formatting
+  -- =============================================
+
   json = {
+    -- Indentation spaces for pretty-printed JSON
     indent = 2,
-    use_jq_fallback = true,  -- Use jq for large objects if available
+    -- Use jq CLI tool for formatting very large JSON objects (>10KB)
+    use_jq_fallback = true,
+    -- Path to jq binary (if not in PATH)
     jq_path = "jq",
   },
 
-  -- Navigation settings
+  -- =============================================
+  -- Navigation
+  -- =============================================
+
   navigation = {
-    error_field = "level",  -- Field to check for error detection
+    -- Field name to check for error detection (e.g., "level", "severity")
+    error_field = "level",
+    -- Values that indicate an error
     error_values = { "error", "ERROR", "fatal", "FATAL" },
   },
 
-  -- Display settings
+  -- =============================================
+  -- Display
+  -- =============================================
+
   display = {
+    -- Show line numbers in preview buffer
     show_line_numbers = true,
+    -- Enable JSON syntax highlighting
     syntax_highlighting = true,
-    compact_fields = { "timestamp", "level", "message" },  -- Fields for compact mode
-    table_max_col_width = 30,      -- Max column width in table mode
-    table_null_placeholder = "-",  -- Placeholder for missing values in table mode
-    table_page_size = 50,          -- Entries per page in table mode (pagination)
+    -- Fields to show in compact mode
+    compact_fields = { "timestamp", "level", "message" },
+    -- Maximum column width in table mode (cells are truncated with "..." if longer)
+    table_max_col_width = 30,
+    -- Placeholder text for null/missing values in table mode
+    table_null_placeholder = "-",
+    -- Number of entries per page in table mode (pagination)
+    table_page_size = 50,
   },
 
-  -- Analysis settings
+  -- =============================================
+  -- Analysis
+  -- =============================================
+
   analysis = {
-    timestamp_field = "timestamp",  -- Field containing timestamp
-    timestamp_formats = {           -- Supported timestamp formats
-      "%Y-%m-%dT%H:%M:%S",
-      "%Y-%m-%d %H:%M:%S",
-      "iso8601",
+    -- Field name containing timestamps for time-range filtering
+    timestamp_field = "timestamp",
+    -- Supported timestamp formats for parsing
+    timestamp_formats = {
+      "%Y-%m-%dT%H:%M:%S",  -- ISO 8601 without timezone
+      "%Y-%m-%d %H:%M:%S",  -- Common database format
+      "iso8601",             -- Full ISO 8601 with timezone
     },
   },
 
-  -- Performance settings
+  -- =============================================
+  -- Performance
+  -- =============================================
+
   performance = {
-    use_jq_for_tables = true,  -- Use jq for table formatting (faster for large files)
+    -- Use jq for table formatting (faster for large files)
+    -- Falls back to pure Lua if jq is not available
+    use_jq_for_tables = true,
   },
 
-  -- Advanced settings
+  -- =============================================
+  -- Advanced
+  -- =============================================
+
   advanced = {
-    tail_update_interval = 100,  -- Milliseconds between tail updates
-    max_preview_size = 10000,    -- Max chars for pretty-print (fallback to jq)
-    virtual_text = true,         -- Enable virtual text annotations
+    -- Update interval for tail mode in milliseconds
+    tail_update_interval = 100,
+    -- Maximum character count for JSON pretty-print before using jq fallback
+    max_preview_size = 10000,
+    -- Show virtual text annotations (e.g., line info)
+    virtual_text = true,
   },
 
-  -- Streaming settings for large files (100MB-1GB)
+  -- =============================================
+  -- Streaming Mode (Large Files: 100MB-1GB)
+  -- =============================================
+
   streaming = {
-    enabled = "auto",              -- true, false, or "auto" (auto enables for files > threshold_mb)
-    threshold_mb = 10,             -- File size threshold in MB for auto-enabling streaming
-    chunk_size = 1000,             -- Number of lines to load at once
-    cache_size = 100,              -- Maximum parsed JSON objects to cache
-    table_sample_size = 1000,      -- Sample size for discovering table columns
-    stats_sample_size = 10000,     -- Sample size for statistics calculation
-    show_progress = true,           -- Show progress for long operations
+    -- Enable streaming: true, false, or "auto"
+    -- "auto" enables streaming for files larger than threshold_mb
+    enabled = "auto",
+    -- File size threshold in MB for auto-enabling streaming
+    threshold_mb = 10,
+    -- Number of lines to load per chunk
+    chunk_size = 1000,
+    -- Maximum parsed JSON objects to keep in memory
+    cache_size = 100,
+    -- Sample size for discovering table columns (to avoid loading entire file)
+    table_sample_size = 1000,
+    -- Sample size for statistics calculation
+    stats_sample_size = 10000,
+    -- Show progress messages for long operations
+    show_progress = true,
   },
 
-  -- Keybinds (all available keys for customization)
+  -- =============================================
+  -- Keybindings
+  -- =============================================
+
   keys = {
+    -- Navigation
     quit = "q",                  -- Close viewer
     next_entry = "j",            -- Next log entry
     prev_entry = "k",            -- Previous log entry
-    next_error = "]e",           -- Next error
-    prev_error = "[e",           -- Previous error
     first_entry = "gg",          -- First entry
     last_entry = "G",            -- Last entry
-    toggle_fold = "<CR>",        -- Toggle fold
-    yank_json = "y",             -- Yank formatted JSON
-    bookmark = "m",              -- Bookmark line
-    list_bookmarks = "'",        -- List bookmarks
-    search = "/",                -- Search by field
-    compact_mode = "c",          -- Toggle compact mode
-    diff_view = "d",             -- Diff with marked
-    tail_mode = "t",             -- Toggle tail mode
-    stats = "s",                 -- Show statistics
+
+    -- Error Navigation
+    next_error = "]e",           -- Next error log
+    prev_error = "[e",           -- Previous error log
+
+    -- Preview Actions
+    toggle_fold = "<CR>",        -- Toggle fold in preview
+    yank_json = "y",             -- Yank formatted JSON to clipboard
+    switch_pane = "<Tab>",       -- Toggle between source and preview panes
+    maximize_preview = "f",      -- Toggle preview panel maximize/restore
+
+    -- Search & Filter
+    search = "/",                -- Search by field value
+
+    -- Bookmarks
+    bookmark = "m",              -- Bookmark current line
+    list_bookmarks = "'",        -- List all bookmarks
+
+    -- Display Modes
+    compact_mode = "c",          -- Toggle compact view
     table_mode = "T",            -- Toggle table preview mode
-    table_columns = "C",          -- Open column filter modal
-    table_next_page = "]",        -- Next page in table mode
-    table_prev_page = "[",        -- Previous page in table mode
-    table_first_page = "[[",      -- First page in table mode
-    table_last_page = "]]",       -- Last page in table mode
-    inspect_cell = "<CR>",        -- Inspect table cell (in table mode)
-    switch_pane = "<Tab>",        -- Toggle between source and preview panes
-    maximize_preview = "f",       -- Toggle preview panel maximize/restore
+
+    -- Table Mode Pagination
+    table_next_page = "]",       -- Next page
+    table_prev_page = "[",       -- Previous page
+    table_first_page = "[[",     -- First page
+    table_last_page = "]]",      -- Last page
+
+    -- Table Mode Features
+    table_columns = "C",         -- Open column filter modal
+    inspect_cell = "<CR>",       -- Inspect table cell (press in preview)
+
+    -- Analysis
+    diff_view = "d",             -- Diff with marked line
+    tail_mode = "t",             -- Toggle live tail mode
+    stats = "s",                 -- Show log statistics
   },
 })
 ```
+
+### Configuration Notes
+
+- **Streaming Mode**: Automatically enabled for files >10MB. Loads data in chunks to avoid memory issues.
+- **jq Integration**: Requires `jq` to be installed. Falls back gracefully if unavailable.
+- **Table Mode**: Paginated view shows 50 entries per page by default. Use `]`/`[` to navigate pages.
+- **Custom Keybindings**: Override any key by setting it in the `keys` table.
 
 ## 📊 Table Preview Mode
 
