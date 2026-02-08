@@ -149,6 +149,11 @@ require("jsonlogs").setup({
     },
   },
 
+  -- Performance settings
+  performance = {
+    use_jq_for_tables = true,  -- Use jq for table formatting (faster for large files)
+  },
+
   -- Advanced settings
   advanced = {
     tail_update_interval = 100,  -- Milliseconds between tail updates

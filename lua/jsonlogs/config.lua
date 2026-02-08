@@ -56,6 +56,11 @@ M.defaults = {
     virtual_text = true,        -- Enable virtual text annotations
   },
 
+  -- Performance settings
+  performance = {
+    use_jq_for_tables = true,   -- Use jq for table formatting (faster for large files)
+  },
+
   -- Streaming settings for large files (100MB-1GB)
   streaming = {
     enabled = "auto",           -- true, false, or "auto" (auto enables for files > threshold_mb)

@@ -40,6 +40,8 @@ M.state = {
   pagination_state = nil, -- Table pagination state {current_page, per_page, total_pages, total_entries}
   table_cell_metadata = nil, -- Cell metadata for inspection {row_num -> {col_name -> {value, truncated, type}}}
   maximized_window = nil,    -- Which window is maximized: "source", "preview", or nil
+  last_updated_row = nil,    -- Track last row that triggered update (for performance)
+  truncation_indicators_added = false, -- Track if truncation indicators are already added (for performance)
 
   -- Streaming mode state
   streaming_mode = false,      -- Is streaming mode active?
@@ -67,6 +69,7 @@ end
 function M._invalidate_table_cache()
   M.state.table_cache.valid = false
   M.state.table_cache.lines = nil
+  M.state.truncation_indicators_added = false  -- Reset indicators flag
 end
 
 -- Regenerate table cache
@@ -134,6 +137,7 @@ function M.table_next_page()
 
   if pstate.current_page < pstate.total_pages then
     pstate.current_page = pstate.current_page + 1
+    M.state.last_updated_row = nil  -- Reset to force update
     M._invalidate_table_cache()
     M.update_preview()
   end
@@ -149,6 +153,7 @@ function M.table_prev_page()
 
   if pstate.current_page > 1 then
     pstate.current_page = pstate.current_page - 1
+    M.state.last_updated_row = nil  -- Reset to force update
     M._invalidate_table_cache()
     M.update_preview()
   end
@@ -164,6 +169,7 @@ function M.table_first_page()
 
   if pstate.current_page ~= 1 then
     pstate.current_page = 1
+    M.state.last_updated_row = nil  -- Reset to force update
     M._invalidate_table_cache()
     M.update_preview()
   end
@@ -179,6 +185,7 @@ function M.table_last_page()
 
   if pstate.current_page ~= pstate.total_pages then
     pstate.current_page = pstate.total_pages
+    M.state.last_updated_row = nil  -- Reset to force update
     M._invalidate_table_cache()
     M.update_preview()
   end
@@ -279,6 +286,24 @@ function M.update_preview()
   local cursor_line = vim.api.nvim_win_get_cursor(M.state.source_win)[1]
   M.state.current_line = cursor_line
 
+  -- Performance optimization: Skip unnecessary updates in table mode
+  if M.state.table_mode then
+    local current_win = vim.api.nvim_get_current_win()
+
+    -- Skip updates entirely when focused on preview in table mode
+    -- The table is already rendered and doesn't need to be updated
+    if current_win == M.state.preview_win then
+      return
+    end
+
+    -- Only update if cursor row changed (skip redundant updates)
+    if cursor_line == M.state.last_updated_row then
+      return
+    end
+
+    M.state.last_updated_row = cursor_line
+  end
+
   -- In streaming mode, check if we need to load a new chunk
   if M.state.streaming_mode then
     local actual_line_num = M.state.visible_range[1] + cursor_line - 1
@@ -349,6 +374,7 @@ function M.update_preview()
         -- Check cache validity
         local cache = M.state.table_cache
         local current_line_count = vim.api.nvim_buf_line_count(M.state.source_buf)
+        local cache_regenerated = false
 
         if not cache.valid or
            cache.columns ~= M.state.table_columns or
@@ -369,12 +395,16 @@ function M.update_preview()
             M.state.table_cache.total_lines = current_line_count
             M.state.table_cache.page = M.state.pagination_state.current_page
             M.state.table_cache.valid = true
+
+            -- Mark that content changed, indicators need to be re-added
+            M.state.truncation_indicators_added = false
+            cache_regenerated = true
           else
             preview_lines = { "Error: No pagination state" }
           end
         else
-          -- Use cached table
-          preview_lines = cache.lines
+          -- Use cached table (make a copy to avoid accumulating indicators)
+          preview_lines = vim.list_extend({}, cache.lines)
         end
 
         -- Add pagination indicator
@@ -413,9 +443,11 @@ function M.update_preview()
   vim.api.nvim_buf_set_lines(M.state.preview_buf, 0, -1, false, sanitized_lines)
   vim.api.nvim_buf_set_option(M.state.preview_buf, "modifiable", false)
 
-  -- Add truncation indicators if in table mode
-  if M.state.table_mode and M.state.table_cell_metadata then
+  -- Add truncation indicators if in table mode (only when content changes)
+  -- This is expensive, so we skip it if indicators are already added
+  if M.state.table_mode and M.state.table_cell_metadata and not M.state.truncation_indicators_added then
     M._add_truncation_indicators()
+    M.state.truncation_indicators_added = true
   end
 
   -- Update status line
@@ -887,6 +919,7 @@ function M.setup_keybinds()
   vim.keymap.set("n", keys.table_columns, function()
     table_mod.show_column_filter(M.state, function(columns)
       M.state.table_columns = columns
+      M.state.last_updated_row = nil  -- Reset to force update
       M._invalidate_table_cache()
       M.update_preview()
     end)
@@ -895,6 +928,7 @@ function M.setup_keybinds()
   vim.keymap.set("n", keys.table_columns, function()
     table_mod.show_column_filter(M.state, function(columns)
       M.state.table_columns = columns
+      M.state.last_updated_row = nil  -- Reset to force update
       M._invalidate_table_cache()
       M.update_preview()
     end)
@@ -1057,6 +1091,10 @@ function M.toggle_table_mode()
     M.state.compact_mode = false
     M._invalidate_table_cache()
     M._init_table_pagination()
+
+    -- Reset performance tracking for table mode
+    M.state.last_updated_row = nil
+    M.state.truncation_indicators_added = false
 
     -- Discover columns on first activation if not already set
     if not M.state.table_columns then
