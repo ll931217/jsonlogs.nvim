@@ -65,26 +65,64 @@ use {
 
 ## ⌨️ Default Keybinds
 
+### Navigation
 | Key | Action |
 |-----|--------|
-| `j` / `k` | Next/previous log entry |
-| `gg` / `G` | First/last entry |
-| `]e` / `[e` | Next/previous error |
+| `j` | Next log entry |
+| `k` | Previous log entry |
+| `gg` | First entry |
+| `G` | Last entry |
+| `]e` | Next error log |
+| `[e` | Previous error log |
+
+### Pane Management
+| Key | Action |
+|-----|--------|
 | `<Tab>` | Toggle between source and preview panes |
-| `<CR>` | Toggle fold / Inspect table cell (in table mode) |
-| `y` | Yank formatted JSON |
-| `m` | Bookmark line |
-| `'` | List bookmarks |
-| `/` | Search by field |
-| `c` | Toggle compact mode |
+| `f` | Toggle preview panel maximize/restore |
+
+### Preview Actions
+| Key | Action |
+|-----|--------|
+| `<CR>` | Toggle fold (normal mode) / Inspect table cell (table mode) |
+| `y` | Yank formatted JSON to clipboard |
+
+### Bookmarks
+| Key | Action |
+|-----|--------|
+| `m` | Bookmark current line |
+| `'` | List all bookmarks |
+
+### Search & Filter
+| Key | Action |
+|-----|--------|
+| `/` | Search by field value |
+
+### Display Modes
+| Key | Action |
+|-----|--------|
+| `c` | Toggle compact view |
 | `T` | Toggle table preview mode |
-| `C` | Open column filter (in table mode) |
-| `]` / `[` | Next/previous page (table mode) |
-| `]]` / `[[` | Last/first page (table mode) |
-| `f` | Toggle preview maximize/restore |
-| `d` | Diff with marked |
-| `t` | Toggle tail mode |
-| `s` | Show statistics |
+
+### Table Mode Pagination
+| Key | Action |
+|-----|--------|
+| `]` | Next page |
+| `[` | Previous page |
+| `]]` | Last page |
+| `[[` | First page |
+| `C` | Open column filter modal |
+
+### Analysis
+| Key | Action |
+|-----|--------|
+| `d` | Mark for diff / Show diff with marked |
+| `t` | Toggle live tail mode |
+| `s` | Show log statistics |
+
+### General
+| Key | Action |
+|-----|--------|
 | `q` | Close viewer |
 
 ## 📋 Commands
