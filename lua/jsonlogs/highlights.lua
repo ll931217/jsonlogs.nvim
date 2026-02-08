@@ -21,6 +21,9 @@ function M.setup()
 
   -- Field highlighting
   vim.api.nvim_set_hl(0, "JsonLogsHighlightField", { bg = "#004444", bold = true })
+
+  -- Cell truncation indicator
+  vim.api.nvim_set_hl(0, "JsonLogsCellIndicator", { fg = "#ffaa00", bold = true })
 end
 
 -- Add level-based highlighting to source buffer

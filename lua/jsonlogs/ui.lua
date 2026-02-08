@@ -30,6 +30,16 @@ M.state = {
   filter = nil,          -- Active filter
   table_mode = false,    -- Table preview mode
   table_columns = nil,   -- Selected columns for table mode (nil = all)
+  table_cache = {        -- Cached formatted table
+    lines = nil,
+    columns = nil,
+    total_lines = 0,
+    valid = false,
+    page = nil,          -- Current cached page (for pagination)
+  },
+  pagination_state = nil, -- Table pagination state {current_page, per_page, total_pages, total_entries}
+  table_cell_metadata = nil, -- Cell metadata for inspection {row_num -> {col_name -> {value, truncated, type}}}
+  maximized_window = nil,    -- Which window is maximized: "source", "preview", or nil
 
   -- Streaming mode state
   streaming_mode = false,      -- Is streaming mode active?
@@ -51,6 +61,212 @@ local function create_scratch_buffer(name, filetype)
   vim.api.nvim_buf_set_option(buf, "filetype", filetype)
   vim.api.nvim_buf_set_option(buf, "modifiable", false)
   return buf
+end
+
+-- Invalidate table cache when columns/content changes
+function M._invalidate_table_cache()
+  M.state.table_cache.valid = false
+  M.state.table_cache.lines = nil
+end
+
+-- Regenerate table cache
+function M._regenerate_table_cache(cfg)
+  local all_lines = vim.api.nvim_buf_get_lines(M.state.source_buf, 0, -1, false)
+  local table_result = table_mod.format_table(all_lines, M.state.table_columns, cfg)
+
+  -- Store metadata for cell inspection
+  M.state.table_cell_metadata = table_result.metadata
+  M.state.table_cache.lines = table_result.lines
+  M.state.table_cache.metadata = table_result.metadata
+  M.state.table_cache.columns = M.state.table_columns
+  M.state.table_cache.total_lines = #all_lines
+  M.state.table_cache.valid = true
+
+  return table_result.lines
+end
+
+-- Initialize pagination state for table mode
+function M._init_table_pagination()
+  local cfg = config.get()
+  local total_lines = vim.api.nvim_buf_line_count(M.state.source_buf)
+  local per_page = cfg.display.table_page_size or 50
+
+  M.state.pagination_state = {
+    current_page = 1,
+    per_page = per_page,
+    total_pages = math.ceil(total_lines / per_page),
+    total_entries = total_lines,
+  }
+
+  -- Invalidate table cache when pagination is initialized
+  M._invalidate_table_cache()
+end
+
+-- Get lines for current page
+function M._get_current_page_lines()
+  local pstate = M.state.pagination_state
+  if not pstate then
+    return nil
+  end
+
+  local start_idx = (pstate.current_page - 1) * pstate.per_page
+  local end_idx = math.min(pstate.current_page * pstate.per_page, pstate.total_entries) - 1
+
+  local all_lines = vim.api.nvim_buf_get_lines(M.state.source_buf, 0, -1, false)
+  local page_lines = {}
+
+  for i = start_idx, end_idx do
+    if all_lines[i + 1] then  -- +1 because Lua is 1-indexed
+      table.insert(page_lines, all_lines[i + 1])
+    end
+  end
+
+  return page_lines
+end
+
+-- Navigate to next page
+function M.table_next_page()
+  local pstate = M.state.pagination_state
+  if not pstate then
+    M._init_table_pagination()
+    pstate = M.state.pagination_state
+  end
+
+  if pstate.current_page < pstate.total_pages then
+    pstate.current_page = pstate.current_page + 1
+    M._invalidate_table_cache()
+    M.update_preview()
+  end
+end
+
+-- Navigate to previous page
+function M.table_prev_page()
+  local pstate = M.state.pagination_state
+  if not pstate then
+    M._init_table_pagination()
+    pstate = M.state.pagination_state
+  end
+
+  if pstate.current_page > 1 then
+    pstate.current_page = pstate.current_page - 1
+    M._invalidate_table_cache()
+    M.update_preview()
+  end
+end
+
+-- Navigate to first page
+function M.table_first_page()
+  local pstate = M.state.pagination_state
+  if not pstate then
+    M._init_table_pagination()
+    pstate = M.state.pagination_state
+  end
+
+  if pstate.current_page ~= 1 then
+    pstate.current_page = 1
+    M._invalidate_table_cache()
+    M.update_preview()
+  end
+end
+
+-- Navigate to last page
+function M.table_last_page()
+  local pstate = M.state.pagination_state
+  if not pstate then
+    M._init_table_pagination()
+    pstate = M.state.pagination_state
+  end
+
+  if pstate.current_page ~= pstate.total_pages then
+    pstate.current_page = pstate.total_pages
+    M._invalidate_table_cache()
+    M.update_preview()
+  end
+end
+
+-- Add truncation indicators to table cells
+-- Uses virtual text to show ▶ symbol on truncated cells
+function M._add_truncation_indicators()
+  if not M.state.preview_buf or not M.state.table_cell_metadata then
+    return
+  end
+
+  local ns_id = vim.api.nvim_create_namespace("jsonlogs_truncation")
+  vim.api.nvim_buf_clear_namespace(M.state.preview_buf, ns_id, 0, -1)
+
+  local preview_lines = vim.api.nvim_buf_get_lines(M.state.preview_buf, 0, -1, false)
+
+  -- Iterate through metadata to find truncated cells
+  for row_num, row_data in pairs(M.state.table_cell_metadata) do
+    -- Get the table row line
+    local line = preview_lines[row_num]
+    if not line then
+      goto continue_row
+    end
+
+    -- For each column in the row
+    for col_name, cell_data in pairs(row_data) do
+      if cell_data.truncated then
+        -- Find the position of this cell in the table row
+        -- Table format: | col1 | col2 | col3 |
+        -- We need to find the column's position by parsing the row
+        local col_idx = 0
+        if M.state.table_columns then
+          for i, c in ipairs(M.state.table_columns) do
+            if c == col_name then
+              col_idx = i
+              break
+            end
+          end
+        end
+
+        if col_idx > 0 then
+          -- Parse the table row to find cell boundaries
+          local cell_end_col = M._find_cell_end_position(line, col_idx)
+
+          if cell_end_col then
+            -- Add virtual text indicator
+            vim.api.nvim_buf_set_extmark(M.state.preview_buf, ns_id, row_num - 1, cell_end_col, {
+              virt_text = { { "▶", "JsonLogsCellIndicator" } },
+              virt_text_pos = "overlay",
+            })
+          end
+        end
+      end
+    end
+
+    ::continue_row::
+  end
+end
+
+-- Find the end position of a cell in a markdown table row
+-- @param line string: The table row line
+-- @param col_idx number: The column index (1-based)
+-- @return number|nil: The end position of the cell, or nil if not found
+function M._find_cell_end_position(line, col_idx)
+  -- Table rows have format: | col1 | col2 | col3 |
+  -- We need to count pipe separators to find the cell
+  local pipe_positions = {}
+  for pos = 1, #line do
+    local char = line:sub(pos, pos)
+    if char == "|" then
+      table.insert(pipe_positions, pos)
+    end
+  end
+
+  -- The cell ends at the pipe after it (col_idx + 1)
+  -- But we want the position just before the pipe (after the cell content)
+  if col_idx + 1 <= #pipe_positions then
+    local end_pipe_pos = pipe_positions[col_idx + 1]
+    -- Find the last non-space character before the pipe
+    local cell_end = end_pipe_pos - 1
+    while cell_end > 1 and line:sub(cell_end, cell_end):match("%s") do
+      cell_end = cell_end - 1
+    end
+    return cell_end
+  end
+
+  return nil
 end
 
 -- Update the preview panel with current line's JSON
@@ -130,9 +346,46 @@ function M.update_preview()
         local actual_line = M.state.visible_range[1] + cursor_line - 1
         table.insert(preview_lines, string.format("→ Current row: %d (showing chunk %d-%d)", actual_line, M.state.visible_range[1], M.state.visible_range[2]))
       else
-        local all_lines = vim.api.nvim_buf_get_lines(M.state.source_buf, 0, -1, false)
-        preview_lines = table_mod.format_table(all_lines, M.state.table_columns, cfg)
+        -- Check cache validity
+        local cache = M.state.table_cache
+        local current_line_count = vim.api.nvim_buf_line_count(M.state.source_buf)
+
+        if not cache.valid or
+           cache.columns ~= M.state.table_columns or
+           cache.total_lines ~= current_line_count or
+           cache.page ~= M.state.pagination_state.current_page then
+
+          -- Get only current page lines
+          local page_lines = M._get_current_page_lines()
+          if page_lines then
+            local table_result = table_mod.format_table(page_lines, M.state.table_columns, cfg)
+            preview_lines = table_result.lines
+
+            -- Store metadata for cell inspection and cache
+            M.state.table_cell_metadata = table_result.metadata
+            M.state.table_cache.lines = table_result.lines
+            M.state.table_cache.metadata = table_result.metadata
+            M.state.table_cache.columns = M.state.table_columns
+            M.state.table_cache.total_lines = current_line_count
+            M.state.table_cache.page = M.state.pagination_state.current_page
+            M.state.table_cache.valid = true
+          else
+            preview_lines = { "Error: No pagination state" }
+          end
+        else
+          -- Use cached table
+          preview_lines = cache.lines
+        end
+
+        -- Add pagination indicator
         table.insert(preview_lines, "")
+        local pstate = M.state.pagination_state
+        if pstate then
+          local start_idx = (pstate.current_page - 1) * pstate.per_page + 1
+          local end_idx = math.min(pstate.current_page * pstate.per_page, pstate.total_entries)
+          table.insert(preview_lines, string.format("→ Page %d of %d (showing entries %d-%d of %d)",
+            pstate.current_page, pstate.total_pages, start_idx, end_idx, pstate.total_entries))
+        end
         table.insert(preview_lines, string.format("→ Current row: %d", cursor_line))
       end
     elseif M.state.compact_mode then
@@ -147,10 +400,23 @@ function M.update_preview()
     end
   end
 
+  -- Sanitize lines to ensure no embedded newlines
+  local sanitized_lines = {}
+  for _, line in ipairs(preview_lines) do
+    -- Replace embedded newlines with a visual placeholder
+    local sanitized = line:gsub("\n", "\\n"):gsub("\r", "\\r")
+    table.insert(sanitized_lines, sanitized)
+  end
+
   -- Update preview buffer
   vim.api.nvim_buf_set_option(M.state.preview_buf, "modifiable", true)
-  vim.api.nvim_buf_set_lines(M.state.preview_buf, 0, -1, false, preview_lines)
+  vim.api.nvim_buf_set_lines(M.state.preview_buf, 0, -1, false, sanitized_lines)
   vim.api.nvim_buf_set_option(M.state.preview_buf, "modifiable", false)
+
+  -- Add truncation indicators if in table mode
+  if M.state.table_mode and M.state.table_cell_metadata then
+    M._add_truncation_indicators()
+  end
 
   -- Update status line
   M.update_status()
@@ -161,16 +427,28 @@ end
 -- @return table: Array of formatted table lines
 function M._get_streaming_table_lines(cfg)
   local header = {
-    string.format("─ Table View (showing chunk %d-%d of %d entries) ─",
+    string.format("Table View (showing chunk %d-%d of %d entries)",
       M.state.visible_range[1], M.state.visible_range[2], M.state.total_lines),
     "Use navigation to view more entries",
     "",
   }
 
   local chunk_lines = vim.api.nvim_buf_get_lines(M.state.source_buf, 0, -1, false)
-  local table_lines = table_mod.format_table(chunk_lines, M.state.table_columns, cfg)
+  local table_result = table_mod.format_table(chunk_lines, M.state.table_columns, cfg)
 
-  return vim.list_extend(header, table_lines)
+  -- Store metadata for streaming mode
+  M.state.table_cell_metadata = table_result.metadata
+
+  -- Combine header with table lines using explicit iteration
+  local result = {}
+  for _, line in ipairs(header) do
+    table.insert(result, line)
+  end
+  for _, line in ipairs(table_result.lines) do
+    table.insert(result, line)
+  end
+
+  return result
 end
 
 -- Get compact view of JSON object
@@ -325,6 +603,14 @@ function M.open(source_file)
     end,
   })
 
+  -- Invalidate table cache on buffer write
+  vim.api.nvim_create_autocmd("BufWritePost", {
+    buffer = M.state.source_buf,
+    callback = function()
+      M._invalidate_table_cache()
+    end,
+  })
+
   -- Initial preview update
   M.update_preview()
 end
@@ -415,6 +701,97 @@ function M.load_chunk(start_line, end_line)
   M.state.visible_range = {start_line, end_line}
 end
 
+-- Switch to source pane (left/top)
+function M.switch_to_source()
+  if M.state.source_win and vim.api.nvim_win_is_valid(M.state.source_win) then
+    vim.api.nvim_set_current_win(M.state.source_win)
+
+    -- Transfer maximize state from preview to source
+    if M.state.maximized_window == "preview" then
+      M.state.maximized_window = "source"
+      vim.api.nvim_win_set_width(M.state.source_win, vim.o.columns - 10)
+      vim.api.nvim_win_set_width(M.state.preview_win, 10)
+    end
+  else
+    vim.notify("Source window not available", vim.log.levels.WARN)
+  end
+end
+
+-- Switch to preview pane (right/bottom)
+function M.switch_to_preview()
+  if M.state.preview_win and vim.api.nvim_win_is_valid(M.state.preview_win) then
+    vim.api.nvim_set_current_win(M.state.preview_win)
+
+    -- Transfer maximize state from source to preview
+    if M.state.maximized_window == "source" then
+      M.state.maximized_window = "preview"
+      vim.api.nvim_win_set_width(M.state.preview_win, vim.o.columns - 10)
+      vim.api.nvim_win_set_width(M.state.source_win, 10)
+    end
+  else
+    vim.notify("Preview window not available", vim.log.levels.WARN)
+  end
+end
+
+-- Toggle between source and preview panes
+function M.toggle_pane()
+  local current_win = vim.api.nvim_get_current_win()
+
+  -- If currently in source, switch to preview
+  if current_win == M.state.source_win then
+    M.switch_to_preview()
+  -- If currently in preview, switch to source
+  elseif current_win == M.state.preview_win then
+    M.switch_to_source()
+  else
+    -- If in neither window (shouldn't happen), default to source
+    M.switch_to_source()
+  end
+end
+
+-- Toggle maximize for currently focused window
+function M.toggle_maximize_current()
+  local current_win = vim.api.nvim_get_current_win()
+
+  -- Determine which window is focused
+  local focused_window
+  if current_win == M.state.source_win then
+    focused_window = "source"
+  elseif current_win == M.state.preview_win then
+    focused_window = "preview"
+  else
+    vim.notify("Not in jsonlogs viewer window", vim.log.levels.WARN)
+    return
+  end
+
+  local other_window = focused_window == "source" and "preview" or "source"
+  local focused_win_handle = focused_window == "source" and M.state.source_win or M.state.preview_win
+  local other_win_handle = other_window == "source" and M.state.source_win or M.state.preview_win
+
+  if M.state.maximized_window == focused_window then
+    -- Un-maximize: set both panes to equal width
+    local equal_width = math.floor(vim.o.columns / 2)
+    vim.api.nvim_win_set_width(M.state.source_win, equal_width)
+    vim.api.nvim_win_set_width(M.state.preview_win, equal_width)
+    M.state.maximized_window = nil
+  else
+    -- First, reset any existing maximize to equal width
+    if M.state.maximized_window then
+      local equal_width = math.floor(vim.o.columns / 2)
+      vim.api.nvim_win_set_width(M.state.source_win, equal_width)
+      vim.api.nvim_win_set_width(M.state.preview_win, equal_width)
+    end
+
+    -- Maximize focused window, minimize other
+    local max_width = vim.o.columns - 10  -- Leave small margin
+    local min_width = 10
+
+    vim.api.nvim_win_set_width(focused_win_handle, max_width)
+    vim.api.nvim_win_set_width(other_win_handle, min_width)
+    M.state.maximized_window = focused_window
+  end
+end
+
 -- Set up keybinds for the viewer
 function M.setup_keybinds()
   local cfg = config.get()
@@ -428,6 +805,15 @@ function M.setup_keybinds()
   vim.keymap.set("n", keys.quit, function()
     M.close()
   end, { buffer = M.state.preview_buf, noremap = true, silent = true })
+
+  -- Pane switching (works in both buffers)
+  vim.keymap.set("n", keys.switch_pane, function()
+    M.toggle_pane()
+  end, { buffer = M.state.source_buf, noremap = true, silent = true, desc = "Toggle between source and preview panes" })
+
+  vim.keymap.set("n", keys.switch_pane, function()
+    M.toggle_pane()
+  end, { buffer = M.state.preview_buf, noremap = true, silent = true, desc = "Toggle between source and preview panes" })
 
   -- Yank JSON
   vim.keymap.set("n", keys.yank_json, function()
@@ -471,9 +857,11 @@ function M.setup_keybinds()
     end
   end, { buffer = M.state.source_buf, noremap = true, silent = true, desc = "Mark/show diff" })
 
-  -- Fold toggle in preview buffer
+  -- Fold toggle in preview buffer (not in table mode)
   vim.keymap.set("n", keys.toggle_fold, function()
-    fold.toggle_fold_at_cursor(M.state.preview_buf)
+    if not M.state.table_mode then
+      fold.toggle_fold_at_cursor(M.state.preview_buf)
+    end
   end, { buffer = M.state.preview_buf, noremap = true, silent = true })
 
   -- Statistics
@@ -486,18 +874,102 @@ function M.setup_keybinds()
     tail.toggle_tail(M.state)
   end, { buffer = M.state.source_buf, noremap = true, silent = true })
 
-  -- Table mode toggle
+  -- Table mode toggle (works in both panes)
   vim.keymap.set("n", keys.table_mode, function()
     M.toggle_table_mode()
-  end, { buffer = M.state.source_buf, noremap = true, silent = true })
+  end, { buffer = M.state.source_buf, noremap = true, silent = true, desc = "Toggle table mode" })
 
-  -- Column filter modal
+  vim.keymap.set("n", keys.table_mode, function()
+    M.toggle_table_mode()
+  end, { buffer = M.state.preview_buf, noremap = true, silent = true, desc = "Toggle table mode" })
+
+  -- Column filter modal (works in both panes)
   vim.keymap.set("n", keys.table_columns, function()
     table_mod.show_column_filter(M.state, function(columns)
       M.state.table_columns = columns
+      M._invalidate_table_cache()
       M.update_preview()
     end)
-  end, { buffer = M.state.source_buf, noremap = true, silent = true })
+  end, { buffer = M.state.source_buf, noremap = true, silent = true, desc = "Column filter" })
+
+  vim.keymap.set("n", keys.table_columns, function()
+    table_mod.show_column_filter(M.state, function(columns)
+      M.state.table_columns = columns
+      M._invalidate_table_cache()
+      M.update_preview()
+    end)
+  end, { buffer = M.state.preview_buf, noremap = true, silent = true, desc = "Column filter" })
+
+  -- Table pagination keybinds (active in both panes when table mode is on)
+  vim.keymap.set("n", keys.table_next_page, function()
+    if M.state.table_mode then
+      M.table_next_page()
+    end
+  end, { buffer = M.state.source_buf, noremap = true, silent = true, desc = "Next page in table mode" })
+
+  vim.keymap.set("n", keys.table_next_page, function()
+    if M.state.table_mode then
+      M.table_next_page()
+    end
+  end, { buffer = M.state.preview_buf, noremap = true, silent = true, desc = "Next page in table mode" })
+
+  vim.keymap.set("n", keys.table_prev_page, function()
+    if M.state.table_mode then
+      M.table_prev_page()
+    end
+  end, { buffer = M.state.source_buf, noremap = true, silent = true, desc = "Previous page in table mode" })
+
+  vim.keymap.set("n", keys.table_prev_page, function()
+    if M.state.table_mode then
+      M.table_prev_page()
+    end
+  end, { buffer = M.state.preview_buf, noremap = true, silent = true, desc = "Previous page in table mode" })
+
+  vim.keymap.set("n", keys.table_first_page, function()
+    if M.state.table_mode then
+      M.table_first_page()
+    end
+  end, { buffer = M.state.source_buf, noremap = true, silent = true, desc = "First page in table mode" })
+
+  vim.keymap.set("n", keys.table_first_page, function()
+    if M.state.table_mode then
+      M.table_first_page()
+    end
+  end, { buffer = M.state.preview_buf, noremap = true, silent = true, desc = "First page in table mode" })
+
+  vim.keymap.set("n", keys.table_last_page, function()
+    if M.state.table_mode then
+      M.table_last_page()
+    end
+  end, { buffer = M.state.source_buf, noremap = true, silent = true, desc = "Last page in table mode" })
+
+  vim.keymap.set("n", keys.table_last_page, function()
+    if M.state.table_mode then
+      M.table_last_page()
+    end
+  end, { buffer = M.state.preview_buf, noremap = true, silent = true, desc = "Last page in table mode" })
+
+  -- Cell inspection (only active in table mode, in both panes)
+  vim.keymap.set("n", keys.inspect_cell, function()
+    if M.state.table_mode then
+      table_mod.show_cell_inspection(M.state)
+    end
+  end, { buffer = M.state.preview_buf, noremap = true, silent = true, desc = "Inspect table cell" })
+
+  vim.keymap.set("n", keys.inspect_cell, function()
+    if M.state.table_mode then
+      table_mod.show_cell_inspection(M.state)
+    end
+  end, { buffer = M.state.source_buf, noremap = true, silent = true, desc = "Inspect table cell" })
+
+  -- Maximize/restore currently focused pane
+  vim.keymap.set("n", keys.maximize_preview, function()
+    M.toggle_maximize_current()
+  end, { buffer = M.state.source_buf, noremap = true, silent = true, desc = "Toggle pane maximize" })
+
+  vim.keymap.set("n", keys.maximize_preview, function()
+    M.toggle_maximize_current()
+  end, { buffer = M.state.preview_buf, noremap = true, silent = true, desc = "Toggle pane maximize" })
 
   -- Telescope picker (if available)
   vim.keymap.set("n", "<C-f>", function()
@@ -540,6 +1012,14 @@ function M.close()
   M.state.filter = nil
   M.state.table_mode = false
   M.state.table_columns = nil
+  M.state.table_cache.valid = false
+  M.state.table_cache.lines = nil
+  M.state.table_cache.columns = nil
+  M.state.table_cache.total_lines = 0
+  M.state.table_cache.metadata = nil
+  M.state.pagination_state = nil
+  M.state.table_cell_metadata = nil
+  M.state.maximized_window = nil
 
   -- Reset streaming state
   M.state.streaming_mode = false
@@ -575,12 +1055,17 @@ function M.toggle_table_mode()
   if M.state.table_mode then
     -- Disable compact mode when enabling table mode
     M.state.compact_mode = false
+    M._invalidate_table_cache()
+    M._init_table_pagination()
 
     -- Discover columns on first activation if not already set
     if not M.state.table_columns then
       local source = M.state.streaming_mode and M.state.file_path or M.state.source_buf
       M.state.table_columns = table_mod.discover_all_columns(source, M.state.streaming_mode)
     end
+  else
+    M._invalidate_table_cache()
+    M.state.pagination_state = nil
   end
 
   M.update_preview()

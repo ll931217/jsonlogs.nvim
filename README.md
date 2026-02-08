@@ -10,9 +10,15 @@ A powerful Neovim plugin for analyzing JSONL (JSON Lines) log files with an intu
 - 📋 **Split Panel Interface**: Navigate logs in left panel, view pretty-printed JSON in right panel
 - 🎨 **Syntax Highlighting**: JSON syntax highlighting with custom color schemes
 - 🔍 **Smart Navigation**: Jump between error logs, search by field value, bookmark important entries
-- 📊 **Table Preview Mode**: View all log entries as a markdown table with flattened columns and interactive column filtering
+- 🔄 **Pane Switching**: Quick toggle between panes with `<Tab>`
+- 📊 **Table Preview Mode**: View log entries as a paginated markdown table with flattened columns and interactive column filtering
+- 📄 **Pagination**: Efficient table mode with configurable page size (50 entries per page)
+- 🔎 **Cell Inspection**: Press Enter on any table cell to view full content (with truncation indicators ▶)
+- 🔬 **Column Zoom**: Zoom into any column to see all its values (press 'z' in cell inspection)
+- 📐 **Resizable Preview**: Toggle preview panel to full width with `f`
 - 📈 **Analysis Tools**: Statistics, time-range filtering, field highlighting
 - 🚀 **Advanced Features**: Live tail mode, jq integration, Telescope fuzzy search
+- 📦 **Large File Support**: Streaming mode for files 100MB-1GB with chunk loading
 - ⚙️ **Highly Configurable**: Customize all keybinds and behavior
 
 ## Installation
@@ -54,7 +60,8 @@ use {
 2. The split-panel viewer will automatically open
 3. Navigate through logs with `j`/`k`
 4. View pretty-printed JSON in the right panel
-5. Press `q` to close
+5. Press `<Tab>` to toggle between panes
+6. Press `q` to close
 
 ## ⌨️ Default Keybinds
 
@@ -63,7 +70,8 @@ use {
 | `j` / `k` | Next/previous log entry |
 | `gg` / `G` | First/last entry |
 | `]e` / `[e` | Next/previous error |
-| `<CR>` | Toggle fold |
+| `<Tab>` | Toggle between source and preview panes |
+| `<CR>` | Toggle fold / Inspect table cell (in table mode) |
 | `y` | Yank formatted JSON |
 | `m` | Bookmark line |
 | `'` | List bookmarks |
@@ -71,6 +79,9 @@ use {
 | `c` | Toggle compact mode |
 | `T` | Toggle table preview mode |
 | `C` | Open column filter (in table mode) |
+| `]` / `[` | Next/previous page (table mode) |
+| `]]` / `[[` | Last/first page (table mode) |
+| `f` | Toggle preview maximize/restore |
 | `d` | Diff with marked |
 | `t` | Toggle tail mode |
 | `s` | Show statistics |
@@ -108,62 +119,88 @@ require("jsonlogs").setup({
   -- JSON settings
   json = {
     indent = 2,
-    use_jq_fallback = true,
+    use_jq_fallback = true,  -- Use jq for large objects if available
     jq_path = "jq",
   },
 
-  -- Navigation
+  -- Navigation settings
   navigation = {
-    error_field = "level",
+    error_field = "level",  -- Field to check for error detection
     error_values = { "error", "ERROR", "fatal", "FATAL" },
   },
 
-  -- Display
+  -- Display settings
   display = {
     show_line_numbers = true,
     syntax_highlighting = true,
-    compact_fields = { "timestamp", "level", "message" },
+    compact_fields = { "timestamp", "level", "message" },  -- Fields for compact mode
     table_max_col_width = 30,      -- Max column width in table mode
-    table_null_placeholder = "-",  -- Placeholder for missing values
+    table_null_placeholder = "-",  -- Placeholder for missing values in table mode
+    table_page_size = 50,          -- Entries per page in table mode (pagination)
   },
 
-  -- Analysis
+  -- Analysis settings
   analysis = {
-    timestamp_field = "timestamp",
-    timestamp_formats = {
+    timestamp_field = "timestamp",  -- Field containing timestamp
+    timestamp_formats = {           -- Supported timestamp formats
       "%Y-%m-%dT%H:%M:%S",
       "%Y-%m-%d %H:%M:%S",
       "iso8601",
     },
   },
 
-  -- Advanced
+  -- Advanced settings
   advanced = {
-    tail_update_interval = 100,
-    max_preview_size = 10000,
-    virtual_text = true,
+    tail_update_interval = 100,  -- Milliseconds between tail updates
+    max_preview_size = 10000,    -- Max chars for pretty-print (fallback to jq)
+    virtual_text = true,         -- Enable virtual text annotations
   },
 
-  -- Keybinds (customize any/all)
+  -- Streaming settings for large files (100MB-1GB)
+  streaming = {
+    enabled = "auto",              -- true, false, or "auto" (auto enables for files > threshold_mb)
+    threshold_mb = 10,             -- File size threshold in MB for auto-enabling streaming
+    chunk_size = 1000,             -- Number of lines to load at once
+    cache_size = 100,              -- Maximum parsed JSON objects to cache
+    table_sample_size = 1000,      -- Sample size for discovering table columns
+    stats_sample_size = 10000,     -- Sample size for statistics calculation
+    show_progress = true,           -- Show progress for long operations
+  },
+
+  -- Keybinds (all available keys for customization)
   keys = {
-    quit = "q",
-    next_entry = "j",
-    prev_entry = "k",
-    next_error = "]e",
-    prev_error = "[e",
-    compact_mode = "c",
-    table_mode = "T",      -- Toggle table preview
-    table_columns = "C",   -- Column filter
-    tail_mode = "t",
-    stats = "s",
-    -- ... see config.lua for full list
+    quit = "q",                  -- Close viewer
+    next_entry = "j",            -- Next log entry
+    prev_entry = "k",            -- Previous log entry
+    next_error = "]e",           -- Next error
+    prev_error = "[e",           -- Previous error
+    first_entry = "gg",          -- First entry
+    last_entry = "G",            -- Last entry
+    toggle_fold = "<CR>",        -- Toggle fold
+    yank_json = "y",             -- Yank formatted JSON
+    bookmark = "m",              -- Bookmark line
+    list_bookmarks = "'",        -- List bookmarks
+    search = "/",                -- Search by field
+    compact_mode = "c",          -- Toggle compact mode
+    diff_view = "d",             -- Diff with marked
+    tail_mode = "t",             -- Toggle tail mode
+    stats = "s",                 -- Show statistics
+    table_mode = "T",            -- Toggle table preview mode
+    table_columns = "C",          -- Open column filter modal
+    table_next_page = "]",        -- Next page in table mode
+    table_prev_page = "[",        -- Previous page in table mode
+    table_first_page = "[[",      -- First page in table mode
+    table_last_page = "]]",       -- Last page in table mode
+    inspect_cell = "<CR>",        -- Inspect table cell (in table mode)
+    switch_pane = "<Tab>",        -- Toggle between source and preview panes
+    maximize_preview = "f",       -- Toggle preview panel maximize/restore
   },
 })
 ```
 
 ## 📊 Table Preview Mode
 
-Press `T` to view all log entries as a spreadsheet-like markdown table:
+Press `T` to view log entries as a spreadsheet-like markdown table:
 
 ```markdown
 | id | level | message            | user.name | user.age | tags[0] | tags[1] | service  |
@@ -178,7 +215,17 @@ Press `T` to view all log entries as a spreadsheet-like markdown table:
 - Array indexing (`tags[0]`, `tags[1]`)
 - Interactive column filtering with `C`
 - Configurable column widths and null placeholders
-- Shows all entries in one view (spreadsheet mode)
+- **Pagination** for large files (50 entries per page by default)
+- Navigate pages with `]` (next), `[` (previous), `]]` (last), `[[` (first)
+- **Cell Inspection**: Press Enter on any cell to view full content (truncated cells show ▶ indicator)
+- **Column Zoom**: Press `z` in cell inspection to see all values from that column
+- **Maximize Preview**: Press `f` to expand preview to full width
+
+**Navigation:**
+- Press `<Tab>` to toggle between source and preview panes
+- Press `Enter` on any cell to inspect its full content
+- Use `]`/`[` to navigate pages in table mode
+- Each page shows "Page X of Y (showing entries X-Y of Z)"
 
 ## 🚀 Implementation Status
 

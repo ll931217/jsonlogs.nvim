@@ -36,6 +36,7 @@ M.defaults = {
     compact_fields = { "timestamp", "level", "message" }, -- Fields for compact mode
     table_max_col_width = 30,      -- Max column width in table mode
     table_null_placeholder = "-",  -- Placeholder for missing values in table mode
+    table_page_size = 50,          -- Entries per page in table mode (pagination)
   },
 
   -- Analysis settings
@@ -84,8 +85,15 @@ M.defaults = {
     diff_view = "d",
     tail_mode = "t",
     stats = "s",
-    table_mode = "T",      -- Toggle table preview mode
-    table_columns = "C",   -- Open column filter modal
+    table_mode = "T",          -- Toggle table preview mode
+    table_columns = "C",       -- Open column filter modal
+    table_next_page = "]",     -- Next page in table mode
+    table_prev_page = "[",     -- Previous page in table mode
+    table_first_page = "[[",   -- First page in table mode
+    table_last_page = "]]",    -- Last page in table mode
+    inspect_cell = "<CR>",     -- Inspect table cell (in table mode)
+    switch_pane = "<Tab>",     -- Toggle between source and preview panes
+    maximize_preview = "f",    -- Toggle preview panel maximize/restore
   },
 }
 
