@@ -10,6 +10,8 @@ local stats = require("jsonlogs.stats")
 local tail = require("jsonlogs.tail")
 local virtual = require("jsonlogs.virtual")
 local table_mod = require("jsonlogs.table")
+local stream = require("jsonlogs.stream")
+local cache = require("jsonlogs.cache")
 
 local M = {}
 
@@ -28,6 +30,12 @@ M.state = {
   filter = nil,          -- Active filter
   table_mode = false,    -- Table preview mode
   table_columns = nil,   -- Selected columns for table mode (nil = all)
+
+  -- Streaming mode state
+  streaming_mode = false,      -- Is streaming mode active?
+  file_path = nil,             -- Original file path (for streaming)
+  line_index = nil,            -- Line position index
+  visible_range = {1, 1},      -- Currently loaded line range {start, end}
 }
 
 -- Create a scratch buffer
@@ -52,11 +60,46 @@ function M.update_preview()
   end
 
   local cfg = config.get()
-  local line_num = vim.api.nvim_win_get_cursor(M.state.source_win)[1]
-  M.state.current_line = line_num
+  local cursor_line = vim.api.nvim_win_get_cursor(M.state.source_win)[1]
+  M.state.current_line = cursor_line
+
+  -- In streaming mode, check if we need to load a new chunk
+  if M.state.streaming_mode then
+    local actual_line_num = M.state.visible_range[1] + cursor_line - 1
+
+    -- Check if cursor is near the edge of the visible chunk
+    local range = M.state.visible_range
+    local chunk_size = cfg.streaming.chunk_size
+    local edge_threshold = math.floor(chunk_size * 0.2)  -- Load new chunk when within 20% of edge
+
+    if cursor_line <= edge_threshold then
+      -- Near top edge, load previous chunk
+      local new_start = math.max(1, range[1] - chunk_size)
+      local new_end = math.min(M.state.total_lines, range[2] - chunk_size)
+      if new_start >= 1 and new_start < range[1] then
+        M.load_chunk(new_start, math.min(new_start + chunk_size - 1, M.state.total_lines))
+        -- Adjust cursor to maintain position
+        local new_cursor_line = cursor_line + (range[1] - new_start)
+        vim.api.nvim_win_set_cursor(M.state.source_win, {new_cursor_line, 0})
+      end
+    elseif cursor_line >= (chunk_size - edge_threshold) then
+      -- Near bottom edge, load next chunk
+      local new_end = math.min(M.state.total_lines, range[2] + chunk_size)
+      local new_start = math.max(1, new_end - chunk_size + 1)
+      if new_end > range[2] then
+        M.load_chunk(new_start, new_end)
+        -- Adjust cursor to maintain position
+        local new_cursor_line = cursor_line - (range[1] - new_start)
+        vim.api.nvim_win_set_cursor(M.state.source_win, {new_cursor_line, 0})
+      end
+    end
+
+    -- Update actual line number for preview
+    actual_line_num = M.state.visible_range[1] + vim.api.nvim_win_get_cursor(M.state.source_win)[1] - 1
+  end
 
   -- Get the current line
-  local lines = vim.api.nvim_buf_get_lines(M.state.source_buf, line_num - 1, line_num, false)
+  local lines = vim.api.nvim_buf_get_lines(M.state.source_buf, cursor_line - 1, cursor_line, false)
   if #lines == 0 then
     return
   end
@@ -79,12 +122,19 @@ function M.update_preview()
   else
     if M.state.table_mode then
       -- Table mode: show all entries as table rows
-      local all_lines = vim.api.nvim_buf_get_lines(M.state.source_buf, 0, -1, false)
-      preview_lines = table_mod.format_table(all_lines, M.state.table_columns, cfg)
-
-      -- Add current row indicator
-      table.insert(preview_lines, "")
-      table.insert(preview_lines, string.format("→ Current row: %d", line_num))
+      if M.state.streaming_mode then
+        -- In streaming mode, show warning about pagination
+        local table_lines = M._get_streaming_table_lines(cfg)
+        preview_lines = table_lines
+        table.insert(preview_lines, "")
+        local actual_line = M.state.visible_range[1] + cursor_line - 1
+        table.insert(preview_lines, string.format("→ Current row: %d (showing chunk %d-%d)", actual_line, M.state.visible_range[1], M.state.visible_range[2]))
+      else
+        local all_lines = vim.api.nvim_buf_get_lines(M.state.source_buf, 0, -1, false)
+        preview_lines = table_mod.format_table(all_lines, M.state.table_columns, cfg)
+        table.insert(preview_lines, "")
+        table.insert(preview_lines, string.format("→ Current row: %d", cursor_line))
+      end
     elseif M.state.compact_mode then
       -- Compact mode: show only selected fields
       preview_lines = M.get_compact_view(parsed, cfg)
@@ -104,6 +154,23 @@ function M.update_preview()
 
   -- Update status line
   M.update_status()
+end
+
+-- Get table lines for streaming mode (paginated view)
+-- @param cfg table: Configuration
+-- @return table: Array of formatted table lines
+function M._get_streaming_table_lines(cfg)
+  local header = {
+    string.format("─ Table View (showing chunk %d-%d of %d entries) ─",
+      M.state.visible_range[1], M.state.visible_range[2], M.state.total_lines),
+    "Use navigation to view more entries",
+    "",
+  }
+
+  local chunk_lines = vim.api.nvim_buf_get_lines(M.state.source_buf, 0, -1, false)
+  local table_lines = table_mod.format_table(chunk_lines, M.state.table_columns, cfg)
+
+  return vim.list_extend(header, table_lines)
 end
 
 -- Get compact view of JSON object
@@ -135,11 +202,13 @@ function M.update_status()
     return
   end
 
-  local status = string.format(
-    "Line %d/%d",
-    M.state.current_line,
-    M.state.total_lines
-  )
+  local status
+  if M.state.streaming_mode then
+    local range = M.state.visible_range
+    status = string.format("Lines %d-%d of %d", range[1], range[2], M.state.total_lines)
+  else
+    status = string.format("Line %d/%d", M.state.current_line, M.state.total_lines)
+  end
 
   if M.state.table_mode then
     status = status .. " [TABLE]"
@@ -149,6 +218,10 @@ function M.update_status()
 
   if M.state.tail_mode then
     status = status .. " [TAIL]"
+  end
+
+  if M.state.streaming_mode then
+    status = status .. " [STREAMING]"
   end
 
   if M.state.filter then
@@ -166,13 +239,22 @@ function M.open(source_file)
   -- Get or create source buffer
   if source_file then
     M.state.source_buf = vim.fn.bufnr(source_file, true)
+    M.state.file_path = vim.fn.expand(source_file)
     vim.fn.bufload(M.state.source_buf)
   else
     M.state.source_buf = vim.api.nvim_get_current_buf()
+    M.state.file_path = vim.api.nvim_buf_get_name(M.state.source_buf)
   end
 
-  -- Count total lines
-  M.state.total_lines = vim.api.nvim_buf_line_count(M.state.source_buf)
+  -- Determine if we should use streaming mode
+  local should_stream = M._should_enable_streaming(M.state.file_path, cfg)
+
+  if should_stream then
+    M.enable_streaming_mode(M.state.file_path, cfg)
+  else
+    -- Use existing non-streaming behavior
+    M.state.total_lines = vim.api.nvim_buf_line_count(M.state.source_buf)
+  end
 
   -- Create preview buffer
   M.state.preview_buf = create_scratch_buffer("JsonLogs Preview", "json")
@@ -211,15 +293,26 @@ function M.open(source_file)
     end
   end
 
+  -- Initialize cache with configured size
+  cache.setup({ max_size = cfg.streaming.cache_size })
+
   -- Initialize highlights
   highlights.setup()
 
   -- Apply highlighting to source buffer
-  local all_lines = vim.api.nvim_buf_get_lines(M.state.source_buf, 0, -1, false)
-  highlights.highlight_source_buffer(M.state.source_buf, all_lines, cfg)
+  if M.state.streaming_mode then
+    -- For streaming mode, highlight only the visible chunk
+    local chunk_lines = vim.api.nvim_buf_get_lines(M.state.source_buf, 0, -1, false)
+    highlights.highlight_source_buffer(M.state.source_buf, chunk_lines, cfg)
+  else
+    local all_lines = vim.api.nvim_buf_get_lines(M.state.source_buf, 0, -1, false)
+    highlights.highlight_source_buffer(M.state.source_buf, all_lines, cfg)
+  end
 
-  -- Add virtual text annotations
-  virtual.add_virtual_text(M.state.source_buf, cfg)
+  -- Add virtual text annotations (skip in streaming mode for performance)
+  if not M.state.streaming_mode then
+    virtual.add_virtual_text(M.state.source_buf, cfg)
+  end
 
   -- Set up keybinds
   M.setup_keybinds()
@@ -234,6 +327,92 @@ function M.open(source_file)
 
   -- Initial preview update
   M.update_preview()
+end
+
+-- Determine if streaming mode should be enabled
+-- @param file_path string: Path to the file
+-- @param cfg table: Configuration
+-- @return boolean: True if streaming should be enabled
+function M._should_enable_streaming(file_path, cfg)
+  local stream_cfg = cfg.streaming
+
+  -- Check if streaming is explicitly disabled
+  if stream_cfg.enabled == false then
+    return false
+  end
+
+  -- Check if streaming is explicitly enabled
+  if stream_cfg.enabled == true then
+    return true
+  end
+
+  -- Auto mode: check file size
+  local file_size_mb = stream.get_file_size_mb(file_path)
+  return file_size_mb > stream_cfg.threshold_mb
+end
+
+-- Enable streaming mode
+-- @param file_path string: Path to the file
+-- @param cfg table: Configuration
+function M.enable_streaming_mode(file_path, cfg)
+  cfg = cfg or config.get()
+
+  M.state.streaming_mode = true
+  M.state.file_path = file_path
+
+  -- Show progress if enabled
+  if cfg.streaming.show_progress then
+    vim.notify("Building line index...", vim.log.levels.INFO)
+  end
+
+  -- Build line position index
+  local progress_callback
+  if cfg.streaming.show_progress then
+    progress_callback = function(current, total, percent)
+      vim.notify(string.format("Indexing: %d%% (%d/%d lines)", percent, current, total), vim.log.levels.INFO)
+    end
+  end
+
+  M.state.line_index = stream.build_index(file_path, progress_callback)
+
+  if not M.state.line_index then
+    vim.notify("Failed to build line index, falling back to non-streaming mode", vim.log.levels.WARN)
+    M.state.streaming_mode = false
+    return
+  end
+
+  M.state.total_lines = M.state.line_index.total_lines
+
+  -- Load initial chunk
+  local chunk_size = cfg.streaming.chunk_size
+  local initial_end = math.min(chunk_size, M.state.total_lines)
+  M.load_chunk(1, initial_end)
+
+  if cfg.streaming.show_progress then
+    vim.notify(string.format("Streaming mode enabled: %d lines indexed", M.state.total_lines), vim.log.levels.INFO)
+  end
+end
+
+-- Load a chunk of lines into the source buffer
+-- @param start_line number: 1-indexed start line
+-- @param end_line number: 1-indexed end line (inclusive)
+function M.load_chunk(start_line, end_line)
+  if not M.state.streaming_mode or not M.state.file_path then
+    return
+  end
+
+  local lines = stream.get_lines(M.state.file_path, start_line, end_line)
+  if not lines then
+    vim.notify("Failed to load chunk", vim.log.levels.ERROR)
+    return
+  end
+
+  -- Update buffer with chunk
+  vim.api.nvim_buf_set_option(M.state.source_buf, "modifiable", true)
+  vim.api.nvim_buf_set_lines(M.state.source_buf, 0, -1, false, lines)
+  vim.api.nvim_buf_set_option(M.state.source_buf, "modifiable", false)
+
+  M.state.visible_range = {start_line, end_line}
 end
 
 -- Set up keybinds for the viewer
@@ -343,6 +522,11 @@ function M.close()
     vim.api.nvim_win_close(M.state.preview_win, true)
   end
 
+  -- Clear stream cache if in streaming mode
+  if M.state.streaming_mode and M.state.file_path then
+    stream.clear_cache(M.state.file_path)
+  end
+
   -- Reset state
   M.state.source_buf = nil
   M.state.preview_buf = nil
@@ -356,6 +540,12 @@ function M.close()
   M.state.filter = nil
   M.state.table_mode = false
   M.state.table_columns = nil
+
+  -- Reset streaming state
+  M.state.streaming_mode = false
+  M.state.file_path = nil
+  M.state.line_index = nil
+  M.state.visible_range = {1, 1}
 end
 
 -- Yank formatted JSON to clipboard
@@ -388,7 +578,8 @@ function M.toggle_table_mode()
 
     -- Discover columns on first activation if not already set
     if not M.state.table_columns then
-      M.state.table_columns = table_mod.discover_all_columns(M.state.source_buf)
+      local source = M.state.streaming_mode and M.state.file_path or M.state.source_buf
+      M.state.table_columns = table_mod.discover_all_columns(source, M.state.streaming_mode)
     end
   end
 

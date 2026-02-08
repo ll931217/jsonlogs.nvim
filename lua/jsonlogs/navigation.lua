@@ -1,37 +1,73 @@
 -- Navigation features for jsonlogs.nvim
 local json = require("jsonlogs.json")
 local config = require("jsonlogs.config")
+local stream = require("jsonlogs.stream")
 
 local M = {}
 
 -- Jump to next entry matching a condition
--- @param buf number: Source buffer
+-- @param buf_or_file_path number|string: Source buffer or file path (for streaming mode)
 -- @param start_line number: Starting line number
 -- @param condition function: Function that takes parsed JSON and returns boolean
 -- @param direction string: "forward" or "backward"
+-- @param streaming_mode boolean: Whether to use streaming mode
+-- @param total_lines number: Total lines in file (for streaming mode)
 -- @return number|nil: Line number of match or nil if not found
-local function jump_to_match(buf, start_line, condition, direction)
-  local total_lines = vim.api.nvim_buf_line_count(buf)
+local function jump_to_match(buf_or_file_path, start_line, condition, direction, streaming_mode, total_lines)
   local step = direction == "forward" and 1 or -1
   local current = start_line + step
 
-  -- Wrap around
-  while current ~= start_line do
-    if current < 1 then
-      current = total_lines
-    elseif current > total_lines then
-      current = 1
-    end
+  if streaming_mode then
+    -- Streaming mode: iterate through file using stream module
+    local max_iterations = total_lines or 1000000  -- Safety limit
+    local iterations = 0
 
-    local lines = vim.api.nvim_buf_get_lines(buf, current - 1, current, false)
-    if #lines > 0 then
-      local parsed = json.parse(lines[1])
-      if parsed and condition(parsed) then
-        return current
+    while iterations < max_iterations do
+      iterations = iterations + 1
+
+      -- Wrap around
+      if current < 1 then
+        current = total_lines
+      elseif current > total_lines then
+        current = 1
       end
-    end
 
-    current = current + step
+      if current == start_line then
+        break  -- Full cycle, no match
+      end
+
+      local line = stream.get_line(buf_or_file_path, current)
+      if line and line ~= "" then
+        local parsed = json.parse(line)
+        if parsed and condition(parsed) then
+          return current
+        end
+      end
+
+      current = current + step
+    end
+  else
+    -- Non-streaming mode: use buffer
+    local buf_total = vim.api.nvim_buf_line_count(buf_or_file_path)
+
+    -- Wrap around
+    while current ~= start_line do
+      if current < 1 then
+        current = buf_total
+      elseif current > buf_total then
+        current = 1
+      end
+
+      local lines = vim.api.nvim_buf_get_lines(buf_or_file_path, current - 1, current, false)
+      if #lines > 0 then
+        local parsed = json.parse(lines[1])
+        if parsed and condition(parsed) then
+          return current
+        end
+      end
+
+      current = current + step
+    end
   end
 
   return nil
@@ -48,6 +84,12 @@ function M.jump_to_next_error(ui_state)
   local cfg = config.get()
   local current_line = vim.api.nvim_win_get_cursor(ui_state.source_win)[1]
 
+  -- Convert buffer cursor position to actual line number if in streaming mode
+  local actual_line = current_line
+  if ui_state.streaming_mode then
+    actual_line = ui_state.visible_range[1] + current_line - 1
+  end
+
   local is_error = function(parsed)
     local level = json.get_field(parsed, cfg.navigation.error_field)
     if not level then
@@ -63,9 +105,16 @@ function M.jump_to_next_error(ui_state)
     return false
   end
 
-  local match_line = jump_to_match(ui_state.source_buf, current_line, is_error, "forward")
+  local source = ui_state.streaming_mode and ui_state.file_path or ui_state.source_buf
+  local match_line = jump_to_match(source, actual_line, is_error, "forward", ui_state.streaming_mode, ui_state.total_lines)
+
   if match_line then
-    vim.api.nvim_win_set_cursor(ui_state.source_win, { match_line, 0 })
+    if ui_state.streaming_mode then
+      -- In streaming mode, we need to load the chunk containing the match
+      M._navigate_to_line_streaming(ui_state, match_line)
+    else
+      vim.api.nvim_win_set_cursor(ui_state.source_win, { match_line, 0 })
+    end
   else
     vim.notify("No more errors found", vim.log.levels.INFO)
   end
@@ -82,6 +131,12 @@ function M.jump_to_prev_error(ui_state)
   local cfg = config.get()
   local current_line = vim.api.nvim_win_get_cursor(ui_state.source_win)[1]
 
+  -- Convert buffer cursor position to actual line number if in streaming mode
+  local actual_line = current_line
+  if ui_state.streaming_mode then
+    actual_line = ui_state.visible_range[1] + current_line - 1
+  end
+
   local is_error = function(parsed)
     local level = json.get_field(parsed, cfg.navigation.error_field)
     if not level then
@@ -97,12 +152,40 @@ function M.jump_to_prev_error(ui_state)
     return false
   end
 
-  local match_line = jump_to_match(ui_state.source_buf, current_line, is_error, "backward")
+  local source = ui_state.streaming_mode and ui_state.file_path or ui_state.source_buf
+  local match_line = jump_to_match(source, actual_line, is_error, "backward", ui_state.streaming_mode, ui_state.total_lines)
+
   if match_line then
-    vim.api.nvim_win_set_cursor(ui_state.source_win, { match_line, 0 })
+    if ui_state.streaming_mode then
+      -- In streaming mode, we need to load the chunk containing the match
+      M._navigate_to_line_streaming(ui_state, match_line)
+    else
+      vim.api.nvim_win_set_cursor(ui_state.source_win, { match_line, 0 })
+    end
   else
     vim.notify("No more errors found", vim.log.levels.INFO)
   end
+end
+
+-- Navigate to a specific line in streaming mode (loads chunk and positions cursor)
+-- @param ui_state table: UI state object
+-- @param target_line number: Target line number (1-indexed, actual line in file)
+function M._navigate_to_line_streaming(ui_state, target_line)
+  local cfg = config.get()
+  local chunk_size = cfg.streaming.chunk_size
+
+  -- Calculate which chunk to load (center target in chunk)
+  local half_chunk = math.floor(chunk_size / 2)
+  local chunk_start = math.max(1, target_line - half_chunk)
+  local chunk_end = math.min(ui_state.total_lines, chunk_start + chunk_size - 1)
+
+  -- Load the chunk
+  local ui = require("jsonlogs.ui")
+  ui.load_chunk(chunk_start, chunk_end)
+
+  -- Position cursor on target line
+  local cursor_line = target_line - chunk_start + 1
+  vim.api.nvim_win_set_cursor(ui_state.source_win, { cursor_line, 0 })
 end
 
 -- Search for entries matching a field value
@@ -117,13 +200,25 @@ function M.search_by_field(ui_state, field, value)
 
   local current_line = vim.api.nvim_win_get_cursor(ui_state.source_win)[1]
 
+  -- Convert buffer cursor position to actual line number if in streaming mode
+  local actual_line = current_line
+  if ui_state.streaming_mode then
+    actual_line = ui_state.visible_range[1] + current_line - 1
+  end
+
   local matches_field = function(parsed)
     return json.matches_filter(parsed, field, value)
   end
 
-  local match_line = jump_to_match(ui_state.source_buf, current_line, matches_field, "forward")
+  local source = ui_state.streaming_mode and ui_state.file_path or ui_state.source_buf
+  local match_line = jump_to_match(source, actual_line, matches_field, "forward", ui_state.streaming_mode, ui_state.total_lines)
+
   if match_line then
-    vim.api.nvim_win_set_cursor(ui_state.source_win, { match_line, 0 })
+    if ui_state.streaming_mode then
+      M._navigate_to_line_streaming(ui_state, match_line)
+    else
+      vim.api.nvim_win_set_cursor(ui_state.source_win, { match_line, 0 })
+    end
     vim.notify(string.format("Found match at line %d", match_line), vim.log.levels.INFO)
   else
     vim.notify(string.format("No match found for %s=%s", field, value), vim.log.levels.WARN)
@@ -209,21 +304,42 @@ function M.jump_to_timestamp(ui_state, target_timestamp)
     return
   end
 
-  -- Linear search through file (could be optimized with binary search)
-  local total_lines = vim.api.nvim_buf_line_count(ui_state.source_buf)
+  if ui_state.streaming_mode then
+    -- Streaming mode: use iterator
+    local total_lines = ui_state.total_lines
 
-  for i = 1, total_lines do
-    local lines = vim.api.nvim_buf_get_lines(ui_state.source_buf, i - 1, i, false)
-    if #lines > 0 then
-      local parsed = json.parse(lines[1])
-      if parsed then
-        local entry_timestamp = json.get_field(parsed, timestamp_field)
-        local entry_time = parse_timestamp(entry_timestamp, formats)
+    for line_num, line in stream.iter_lines(ui_state.file_path, 1, total_lines) do
+      if line and line ~= "" then
+        local parsed = json.parse(line)
+        if parsed then
+          local entry_timestamp = json.get_field(parsed, timestamp_field)
+          local entry_time = parse_timestamp(entry_timestamp, formats)
 
-        if entry_time and entry_time >= target_time then
-          vim.api.nvim_win_set_cursor(ui_state.source_win, { i, 0 })
-          vim.notify(string.format("Jumped to line %d", i), vim.log.levels.INFO)
-          return
+          if entry_time and entry_time >= target_time then
+            M._navigate_to_line_streaming(ui_state, line_num)
+            vim.notify(string.format("Jumped to line %d", line_num), vim.log.levels.INFO)
+            return
+          end
+        end
+      end
+    end
+  else
+    -- Non-streaming mode: use buffer
+    local total_lines = vim.api.nvim_buf_line_count(ui_state.source_buf)
+
+    for i = 1, total_lines do
+      local lines = vim.api.nvim_buf_get_lines(ui_state.source_buf, i - 1, i, false)
+      if #lines > 0 then
+        local parsed = json.parse(lines[1])
+        if parsed then
+          local entry_timestamp = json.get_field(parsed, timestamp_field)
+          local entry_time = parse_timestamp(entry_timestamp, formats)
+
+          if entry_time and entry_time >= target_time then
+            vim.api.nvim_win_set_cursor(ui_state.source_win, { i, 0 })
+            vim.notify(string.format("Jumped to line %d", i), vim.log.levels.INFO)
+            return
+          end
         end
       end
     end

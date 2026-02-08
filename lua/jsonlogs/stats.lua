@@ -1,17 +1,16 @@
 -- Statistics and analysis for JSONL logs
 local json = require("jsonlogs.json")
 local config = require("jsonlogs.config")
+local stream = require("jsonlogs.stream")
 
 local M = {}
 
 -- Analyze log file and generate statistics
--- @param buf number: Source buffer
+-- @param buf_or_file_path number|string: Source buffer or file path (for streaming mode)
+-- @param streaming_mode boolean: Whether to use streaming mode
 -- @return table: Statistics object
-function M.analyze(buf)
+function M.analyze(buf_or_file_path, streaming_mode)
   local cfg = config.get()
-  local total_lines = vim.api.nvim_buf_line_count(buf)
-  local all_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-
   local stats = {
     total_entries = 0,
     parse_errors = 0,
@@ -25,39 +24,104 @@ function M.analyze(buf)
     },
   }
 
-  for i, line in ipairs(all_lines) do
-    if line ~= "" then
-      local parsed, err = json.parse(line)
+  if streaming_mode then
+    -- Streaming mode: use iterator for efficient processing
+    local file_path = buf_or_file_path
+    local total_lines = stream.get_total_lines(file_path)
+    local sample_size = cfg.streaming.stats_sample_size or 10000
 
-      if parsed then
-        stats.total_entries = stats.total_entries + 1
+    -- Show progress for large files
+    if cfg.streaming.show_progress and total_lines > 10000 then
+      vim.notify(string.format("Analyzing %d entries (sampling)...", total_lines), vim.log.levels.INFO)
+    end
 
-        -- Count by level
-        local level = json.get_field(parsed, cfg.navigation.error_field) or "unknown"
-        stats.levels[level] = (stats.levels[level] or 0) + 1
+    local processed = 0
+    local last_progress = 0
 
-        -- Count by service
-        local service = json.get_field(parsed, "service")
-        if service then
-          stats.services[service] = (stats.services[service] or 0) + 1
-        end
+    for line_num, line in stream.iter_lines(file_path, 1, total_lines) do
+      if line ~= "" then
+        local parsed, err = json.parse(line)
 
-        -- Track timestamp range
-        local timestamp = json.get_field(parsed, cfg.analysis.timestamp_field)
-        if timestamp then
-          stats.timestamps.count = stats.timestamps.count + 1
-          if not stats.timestamps.first then
-            stats.timestamps.first = timestamp
+        if parsed then
+          stats.total_entries = stats.total_entries + 1
+
+          -- Count by level
+          local level = json.get_field(parsed, cfg.navigation.error_field) or "unknown"
+          stats.levels[level] = (stats.levels[level] or 0) + 1
+
+          -- Count by service
+          local service = json.get_field(parsed, "service")
+          if service then
+            stats.services[service] = (stats.services[service] or 0) + 1
           end
-          stats.timestamps.last = timestamp
-        end
 
-        -- Track all fields
-        for field in pairs(parsed) do
-          stats.fields[field] = (stats.fields[field] or 0) + 1
+          -- Track timestamp range
+          local timestamp = json.get_field(parsed, cfg.analysis.timestamp_field)
+          if timestamp then
+            stats.timestamps.count = stats.timestamps.count + 1
+            if not stats.timestamps.first then
+              stats.timestamps.first = timestamp
+            end
+            stats.timestamps.last = timestamp
+          end
+
+          -- Track all fields
+          for field in pairs(parsed) do
+            stats.fields[field] = (stats.fields[field] or 0) + 1
+          end
+        else
+          stats.parse_errors = stats.parse_errors + 1
         end
-      else
-        stats.parse_errors = stats.parse_errors + 1
+      end
+
+      -- Progress update
+      processed = processed + 1
+      if cfg.streaming.show_progress and processed % 10000 == 0 then
+        local percent = math.floor((processed / total_lines) * 100)
+        if percent > last_progress then
+          vim.notify(string.format("Analyzed %d/%d entries (%d%%)...", processed, total_lines, percent), vim.log.levels.INFO)
+          last_progress = percent
+        end
+      end
+    end
+  else
+    -- Non-streaming mode: load all lines from buffer
+    local all_lines = vim.api.nvim_buf_get_lines(buf_or_file_path, 0, -1, false)
+
+    for _, line in ipairs(all_lines) do
+      if line ~= "" then
+        local parsed, err = json.parse(line)
+
+        if parsed then
+          stats.total_entries = stats.total_entries + 1
+
+          -- Count by level
+          local level = json.get_field(parsed, cfg.navigation.error_field) or "unknown"
+          stats.levels[level] = (stats.levels[level] or 0) + 1
+
+          -- Count by service
+          local service = json.get_field(parsed, "service")
+          if service then
+            stats.services[service] = (stats.services[service] or 0) + 1
+          end
+
+          -- Track timestamp range
+          local timestamp = json.get_field(parsed, cfg.analysis.timestamp_field)
+          if timestamp then
+            stats.timestamps.count = stats.timestamps.count + 1
+            if not stats.timestamps.first then
+              stats.timestamps.first = timestamp
+            end
+            stats.timestamps.last = timestamp
+          end
+
+          -- Track all fields
+          for field in pairs(parsed) do
+            stats.fields[field] = (stats.fields[field] or 0) + 1
+          end
+        else
+          stats.parse_errors = stats.parse_errors + 1
+        end
       end
     end
   end
@@ -161,14 +225,14 @@ end
 -- Show statistics in a floating window
 -- @param ui_state table: UI state object
 function M.show_stats(ui_state)
-  if not ui_state.source_buf then
+  if not ui_state.source_buf and not ui_state.file_path then
     vim.notify("Viewer not open", vim.log.levels.ERROR)
     return
   end
 
   -- Analyze logs
-  vim.notify("Analyzing logs...", vim.log.levels.INFO)
-  local stats = M.analyze(ui_state.source_buf)
+  local source = ui_state.streaming_mode and ui_state.file_path or ui_state.source_buf
+  local stats = M.analyze(source, ui_state.streaming_mode)
   local lines = M.format_stats(stats)
 
   -- Create floating window

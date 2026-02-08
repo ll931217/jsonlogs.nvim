@@ -1,6 +1,7 @@
 -- Table preview mode for JSONL logs
 local json = require("jsonlogs.json")
 local config = require("jsonlogs.config")
+local stream = require("jsonlogs.stream")
 
 local M = {}
 
@@ -47,13 +48,37 @@ function M.flatten_json(obj, prefix, result)
 end
 
 -- Scan buffer to discover all unique flattened keys
--- @param buf number: Buffer number
+-- @param buf_or_file_path number|string: Buffer number or file path (for streaming mode)
+-- @param streaming_mode boolean: Whether to use streaming mode (sampling)
 -- @return table: Array of unique column names
-function M.discover_all_columns(buf)
-  local all_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+function M.discover_all_columns(buf_or_file_path, streaming_mode)
+  local cfg = config.get()
   local columns_set = {}
+  local lines_to_scan
 
-  for _, line in ipairs(all_lines) do
+  if streaming_mode then
+    -- In streaming mode, sample lines instead of loading all
+    local file_path = buf_or_file_path
+    local total_lines = stream.get_total_lines(file_path)
+    local sample_size = cfg.streaming.table_sample_size or 1000
+
+    -- Calculate step size for sampling
+    local step = math.max(1, math.floor(total_lines / sample_size))
+
+    -- Sample lines
+    lines_to_scan = {}
+    for i = 1, total_lines, step do
+      local line = stream.get_line(file_path, i)
+      if line and line ~= "" then
+        table.insert(lines_to_scan, line)
+      end
+    end
+  else
+    -- Non-streaming mode: load all lines from buffer
+    lines_to_scan = vim.api.nvim_buf_get_lines(buf_or_file_path, 0, -1, false)
+  end
+
+  for _, line in ipairs(lines_to_scan) do
     if line ~= "" then
       local parsed, err = json.parse(line)
       if parsed then
@@ -231,13 +256,14 @@ end
 -- @param ui_state table: UI state object
 -- @param on_confirm function: Callback when columns are confirmed
 function M.show_column_filter(ui_state, on_confirm)
-  if not ui_state.source_buf then
+  if not ui_state.source_buf and not ui_state.file_path then
     vim.notify("Viewer not open", vim.log.levels.ERROR)
     return
   end
 
   -- Discover all columns
-  local all_columns = M.discover_all_columns(ui_state.source_buf)
+  local source = ui_state.streaming_mode and ui_state.file_path or ui_state.source_buf
+  local all_columns = M.discover_all_columns(source, ui_state.streaming_mode)
   if #all_columns == 0 then
     vim.notify("No columns found", vim.log.levels.WARN)
     return

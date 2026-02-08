@@ -55,6 +55,17 @@ M.defaults = {
     virtual_text = true,        -- Enable virtual text annotations
   },
 
+  -- Streaming settings for large files (100MB-1GB)
+  streaming = {
+    enabled = "auto",           -- true, false, or "auto" (auto enables for files > threshold_mb)
+    threshold_mb = 10,          -- File size threshold in MB for auto-enabling streaming
+    chunk_size = 1000,          -- Number of lines to load at once
+    cache_size = 100,           -- Maximum parsed JSON objects to cache
+    table_sample_size = 1000,   -- Sample size for discovering table columns
+    stats_sample_size = 10000,  -- Sample size for statistics calculation
+    show_progress = true,       -- Show progress for long operations
+  },
+
   -- Keybinds (can be overridden via lazy.nvim keys)
   keys = {
     quit = "q",
