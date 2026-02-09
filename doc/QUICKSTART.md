@@ -9,7 +9,7 @@ Add to your Neovim configuration (`~/.config/nvim/lua/plugins/jsonlogs.lua`):
 ```lua
 return {
   dir = vim.fn.getcwd(), -- For local development
-  -- OR when published: "yourusername/jsonlogs.nvim",
+  -- OR when published: "ll931217/jsonlogs.nvim",
 
   ft = "jsonl", -- Lazy load on .jsonl files
 
@@ -173,4 +173,4 @@ Ensure Neovim >= 0.8 and JSON TreeSitter parser installed: `:TSInstall json`
 
 ## Support
 
-Report issues at: https://github.com/yourusername/jsonlogs.nvim/issues
+Report issues at: https://github.com/ll931217/jsonlogs.nvim/issues

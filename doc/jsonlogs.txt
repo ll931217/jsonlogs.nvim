@@ -30,7 +30,7 @@ with a powerful split-panel interface. It provides:
 Using lazy.nvim: >
 
   {
-    "yourusername/jsonlogs.nvim",
+    "ll931217/jsonlogs.nvim",
     ft = "jsonl",
     opts = {
       prefix = "<leader>jl",
@@ -45,7 +45,7 @@ Using lazy.nvim: >
 Using packer.nvim: >
 
   use {
-    "yourusername/jsonlogs.nvim",
+    "ll931217/jsonlogs.nvim",
     config = function()
       require("jsonlogs").setup({
         prefix = "<leader>jl",
